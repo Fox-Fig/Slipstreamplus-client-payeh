@@ -2,9 +2,7 @@
 
 **فارسی | English**: [README-fa.md](README-fa.md) | [README.md](README.md)
 
-A Windows desktop app for managing Slipstream-based proxies, scanning DNS endpoints, and routing traffic through `sing-box` with an easy GUI.
-
-**Note:** This app is a Slipstream client.
+A Windows desktop app that scans and tests clean DNS endpoints, connects to Slipstream, and manages Slipstream configs, while routing traffic through `sing-box` with an easy GUI.
 
 **CLI Version**: [Slipstreamplus-CLI](https://github.com/payeh/Slipstreamplus-CLI)
 
