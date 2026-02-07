@@ -4,6 +4,8 @@
 
 A Windows desktop app that scans and tests clean DNS endpoints, connects to Slipstream, and manages Slipstream configs, while routing traffic through `sing-box` with an easy GUI.
 
+![Screenshot](screen.jpg)
+
 **CLI Version**: [Slipstreamplus-CLI](https://github.com/payeh/Slipstreamplus-CLI)
 
 ## ✨ Key Features

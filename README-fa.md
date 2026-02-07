@@ -4,6 +4,8 @@
 
 یک برنامه دسکتاپ ویندوز که DNSهای تمیز را اسکن و تست می‌کند، به Slipstream وصل می‌شود و کانفیگ‌های Slipstream را مدیریت می‌کند، و ترافیک را با `sing-box` مسیریابی می‌کند.
 
+![Screenshot](screen.jpg)
+
 **نسخه CLI**: [Slipstreamplus-CLI](https://github.com/payeh/Slipstreamplus-CLI)
 
 ## ✨ امکانات اصلی
