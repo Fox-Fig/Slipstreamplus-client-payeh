@@ -181,6 +181,30 @@ def is_valid_ip(ip: str) -> bool:
     except Exception:
         return False
 
+def _split_dns_csv(value: str) -> List[str]:
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    return _normalize_lines(parts)
+
+def _normalize_dns_csv(value: str) -> Optional[str]:
+    parts = _split_dns_csv(value)
+    if not parts:
+        return None
+    for p in parts:
+        if not is_valid_ip(p):
+            return None
+    return ",".join(parts)
+
+def _primary_dns(value: str) -> str:
+    parts = _split_dns_csv(value)
+    return parts[0] if parts else value.strip()
+
+def _resolver_args_from_dns(value: str) -> List[str]:
+    parts = _split_dns_csv(value)
+    args: List[str] = []
+    for p in parts:
+        args += ["--resolver", f"{p}:53"]
+    return args
+
 def _strip_port(ip: str) -> str:
     s = ip.strip()
     if ":" in s:
@@ -829,7 +853,7 @@ class App(QWidget):
         self.proxy_table.setColumnWidth(2, 200)
         self.proxy_table.setColumnWidth(7, 28)
 
-        proxy_hint = QLabel("Paste links with Ctrl+V or use Import. Format: SLIPSTREAM://dns@domain:53#remarks")
+        proxy_hint = QLabel("Paste links with Ctrl+V or use Import. Format: SLIPSTREAM://dns[,dns...]@domain:53#remarks")
         proxy_hint.setStyleSheet("color: #bdbdbd; font-size: 11px;")
 
         top_proxy = QWidget()
@@ -1236,18 +1260,19 @@ class App(QWidget):
             if not domain:
                 return None
             cert = cert.strip()
-            if not cert or not is_valid_ip(cert):
+            cert_norm = _normalize_dns_csv(cert)
+            if not cert_norm:
                 return None
             if not self._is_valid_domain(domain):
                 return None
             return {
                 "type": "SLIPSTREAM",
                 "remarks": remarks,
-                "address": cert,
+                "address": cert_norm,
                 "domain": domain,
                 "port": "53",
                 "transport": transport,
-                "cert": cert,
+                "cert": cert_norm,
             }
         except Exception:
             return None
@@ -1351,6 +1376,11 @@ class App(QWidget):
                     "transport": str(row.get("transport", "TCP")),
                     "cert": str(row.get("address", "")),
                 }
+                addr_norm = _normalize_dns_csv(data["address"])
+                if not addr_norm:
+                    continue
+                data["address"] = addr_norm
+                data["cert"] = addr_norm
                 if not data["address"] or not data["domain"]:
                     continue
                 self._add_proxy_row(data)
@@ -1486,7 +1516,38 @@ class App(QWidget):
         type_edit.setCurrentText("SLIPSTREAM")
         type_edit.setEnabled(False)
         remarks_edit = QLineEdit("")
-        address_edit = QLineEdit("")
+        address_container = QWidget()
+        address_layout = QVBoxLayout(address_container)
+        address_layout.setContentsMargins(0, 0, 0, 0)
+        address_layout.setSpacing(6)
+        address_rows: List[Tuple[QWidget, QLineEdit]] = []
+
+        def _add_address_row(value: str = "") -> None:
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(6)
+            edit = QLineEdit(value)
+            btn_remove = QPushButton("-")
+            btn_remove.setFixedWidth(28)
+
+            def _remove_row() -> None:
+                if len(address_rows) <= 1:
+                    edit.clear()
+                    return
+                row_widget.setParent(None)
+                for i, (w, _) in enumerate(address_rows):
+                    if w is row_widget:
+                        address_rows.pop(i)
+                        break
+
+            btn_remove.clicked.connect(_remove_row)
+            row_layout.addWidget(edit)
+            row_layout.addWidget(btn_remove)
+            address_layout.addWidget(row_widget)
+            address_rows.append((row_widget, edit))
+
+        _add_address_row("")
         domain_edit = QLineEdit("")
         port_edit = QLineEdit("53")
         port_edit.setReadOnly(True)
@@ -1497,7 +1558,10 @@ class App(QWidget):
         transport_edit.setEnabled(False)
         form.addRow("type", type_edit)
         form.addRow("Remarks", remarks_edit)
-        form.addRow("address", address_edit)
+        form.addRow("address", address_container)
+        add_addr_btn = QPushButton("Add DNS")
+        add_addr_btn.clicked.connect(lambda: _add_address_row(""))
+        form.addRow("", add_addr_btn)
         form.addRow("domain", domain_edit)
         form.addRow("port", port_edit)
         form.addRow("Transport", transport_edit)
@@ -1510,11 +1574,21 @@ class App(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return
 
-        new_addr = address_edit.text().strip()
+        addr_list = [e.text().strip() for _, e in address_rows]
+        addr_list = [a for a in addr_list if a]
+        if not addr_list:
+            QMessageBox.warning(self, DIALOG_TITLE, "Address cannot be empty.")
+            return
+        for a in addr_list:
+            if not is_valid_ip(a):
+                QMessageBox.warning(self, DIALOG_TITLE, "Invalid IP(s) in address.")
+                return
+        new_addr = ",".join(addr_list)
         new_domain = domain_edit.text().strip()
         new_remarks = remarks_edit.text().strip()
-        if not is_valid_ip(new_addr):
-            QMessageBox.warning(self, DIALOG_TITLE, "Invalid IP in address.")
+        new_addr_norm = _normalize_dns_csv(new_addr)
+        if not new_addr_norm:
+            QMessageBox.warning(self, DIALOG_TITLE, "Invalid IP(s) in address.")
             return
         if not self._is_valid_domain(new_domain):
             QMessageBox.warning(self, DIALOG_TITLE, "Invalid domain.")
@@ -1523,11 +1597,11 @@ class App(QWidget):
         data = {
             "type": "SLIPSTREAM",
             "remarks": new_remarks,
-            "address": new_addr,
+            "address": new_addr_norm,
             "domain": new_domain,
             "port": "53",
             "transport": transport_edit.currentText(),
-            "cert": new_addr,
+            "cert": new_addr_norm,
         }
         self._add_proxy_row(data)
         row = self.proxy_table.rowCount() - 1
@@ -1566,7 +1640,42 @@ class App(QWidget):
         type_edit.setCurrentText("SLIPSTREAM")
         type_edit.setEnabled(False)
         remarks_edit = QLineEdit(current_remarks)
-        address_edit = QLineEdit(current_address)
+        address_container = QWidget()
+        address_layout = QVBoxLayout(address_container)
+        address_layout.setContentsMargins(0, 0, 0, 0)
+        address_layout.setSpacing(6)
+        address_rows: List[Tuple[QWidget, QLineEdit]] = []
+
+        def _add_address_row(value: str = "") -> None:
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(6)
+            edit = QLineEdit(value)
+            btn_remove = QPushButton("-")
+            btn_remove.setFixedWidth(28)
+
+            def _remove_row() -> None:
+                if len(address_rows) <= 1:
+                    edit.clear()
+                    return
+                row_widget.setParent(None)
+                for i, (w, _) in enumerate(address_rows):
+                    if w is row_widget:
+                        address_rows.pop(i)
+                        break
+
+            btn_remove.clicked.connect(_remove_row)
+            row_layout.addWidget(edit)
+            row_layout.addWidget(btn_remove)
+            address_layout.addWidget(row_widget)
+            address_rows.append((row_widget, edit))
+
+        addr_parts = _split_dns_csv(current_address)
+        if not addr_parts:
+            addr_parts = [current_address] if current_address else [""]
+        for part in addr_parts:
+            _add_address_row(part)
         port_edit = QLineEdit(current_port)
         port_edit.setReadOnly(True)
         port_edit.setEnabled(False)
@@ -1577,7 +1686,10 @@ class App(QWidget):
         domain_edit = QLineEdit(current_domain)
         form.addRow("type", type_edit)
         form.addRow("Remarks", remarks_edit)
-        form.addRow("address", address_edit)
+        form.addRow("address", address_container)
+        add_addr_btn = QPushButton("Add DNS")
+        add_addr_btn.clicked.connect(lambda: _add_address_row(""))
+        form.addRow("", add_addr_btn)
         form.addRow("domain", domain_edit)
         form.addRow("port", port_edit)
         form.addRow("Transport", transport_edit)
@@ -1590,10 +1702,20 @@ class App(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return
 
-        new_addr = address_edit.text().strip()
+        addr_list = [e.text().strip() for _, e in address_rows]
+        addr_list = [a for a in addr_list if a]
+        if not addr_list:
+            QMessageBox.warning(self, DIALOG_TITLE, "Address cannot be empty.")
+            return
+        for a in addr_list:
+            if not is_valid_ip(a):
+                QMessageBox.warning(self, DIALOG_TITLE, "Invalid IP(s) in address.")
+                return
+        new_addr = ",".join(addr_list)
         new_domain = domain_edit.text().strip()
-        if not is_valid_ip(new_addr):
-            QMessageBox.warning(self, DIALOG_TITLE, "Invalid IP in address.")
+        new_addr_norm = _normalize_dns_csv(new_addr)
+        if not new_addr_norm:
+            QMessageBox.warning(self, DIALOG_TITLE, "Invalid IP(s) in address.")
             return
         if not self._is_valid_domain(new_domain):
             QMessageBox.warning(self, DIALOG_TITLE, "Invalid domain.")
@@ -1608,7 +1730,7 @@ class App(QWidget):
                     self.proxy_table.setItem(r, c, item)
                 item.setText(value)
                 if c == 2:
-                    item.setData(Qt.UserRole, value)
+                    item.setData(Qt.UserRole, new_addr_norm)
                     item.setData(Qt.UserRole + 1, new_domain)
                 if c == 1:
                     item.setData(Qt.UserRole + 3, value)
@@ -1616,7 +1738,7 @@ class App(QWidget):
 
             _set_item(row, 0, type_edit.currentText())
             _set_item(row, 1, remarks_edit.text())
-            _set_item(row, 2, new_addr)
+            _set_item(row, 2, new_addr_norm)
             _set_item(row, 3, port_edit.text())
             _set_item(row, 4, transport_edit.currentText())
         finally:
@@ -1955,10 +2077,13 @@ class App(QWidget):
         self.internal_port = port
         self.slipstream_ready_event.clear()
         self.emitter.log.emit("INFO", f"Proxy: Starting SLIPSTREAM test -> {dns_ip} / {domain} (port {port})")
+        resolver_args = _resolver_args_from_dns(dns_ip)
+        if not resolver_args:
+            self.emitter.log.emit("ERROR", "Proxy: Invalid DNS resolver list.")
+            return None, 0, False
         cmd = [
             slip_path,
-            "--resolver",
-            f"{dns_ip}:53",
+            *resolver_args,
             "--domain",
             domain,
             "--tcp-listen-port",
@@ -2103,8 +2228,9 @@ class App(QWidget):
             return
         dns_ip, _domain = data
         try:
-            self.emitter.log.emit("INFO", f"Proxy: Test tcping running for {dns_ip}")
-            ms, status = self._tcp_ping_address(dns_ip, port=53, timeout=3.0)
+            primary_ip = _primary_dns(dns_ip)
+            self.emitter.log.emit("INFO", f"Proxy: Test tcping running for {primary_ip}")
+            ms, status = self._tcp_ping_address(primary_ip, port=53, timeout=3.0)
             if ms >= 0:
                 self._set_proxy_cell_text(row, 5, f"{ms} ms")
                 self.emitter.log.emit("INFO", f"Proxy: Test tcping result {ms} ms")
@@ -3259,6 +3385,10 @@ class App(QWidget):
         act_add = QAction("Add Config To Proxy", self)
         act_add.triggered.connect(lambda: self.add_scan_rows_to_proxy(rows))
         menu.addAction(act_add)
+        if len(rows) > 1:
+            act_add_multi = QAction("Add Config To Proxy (Multi DNS)", self)
+            act_add_multi.triggered.connect(lambda: self.add_scan_rows_to_proxy_multi(rows))
+            menu.addAction(act_add_multi)
         menu.exec(self.scan_table.mapToGlobal(pos))
 
     def add_scan_row_to_proxy(self, row: int) -> None:
@@ -3291,6 +3421,36 @@ class App(QWidget):
     def add_scan_rows_to_proxy(self, rows: List[int]) -> None:
         for r in rows:
             self.add_scan_row_to_proxy(r)
+
+    def add_scan_rows_to_proxy_multi(self, rows: List[int]) -> None:
+        dns_list: List[str] = []
+        for r in rows:
+            if r < 0 or r >= self.scan_table.rowCount():
+                continue
+            ip_item = self.scan_table.item(r, 0)
+            if not ip_item:
+                continue
+            dns_ip = ip_item.text().strip()
+            if dns_ip and is_valid_ip(dns_ip):
+                dns_list.append(dns_ip)
+        dns_csv = _normalize_dns_csv(",".join(dns_list))
+        if not dns_csv:
+            return
+        scan_domain = self.domain_input.text().strip()
+        if not scan_domain:
+            QMessageBox.warning(self, DIALOG_TITLE, "Domain cannot be empty.")
+            return
+        remarks = f"{len(_split_dns_csv(dns_csv))} DNS"
+        data = {
+            "type": "SLIPSTREAM",
+            "remarks": remarks,
+            "address": dns_csv,
+            "domain": scan_domain,
+            "port": "53",
+            "cert": dns_csv,
+        }
+        self._add_proxy_row(data)
+        self.emitter.log.emit("INFO", f"Proxy: Added multi DNS config from scan ({remarks}) / {scan_domain}")
 
     def set_dns_to_connect(self, ip: str) -> None:
         if self.real_ping_running:
@@ -3937,6 +4097,11 @@ class App(QWidget):
         if not target_ip:
             QMessageBox.warning(self, DIALOG_TITLE, "Please select a DNS server first.")
             return
+        target_ip_norm = _normalize_dns_csv(target_ip)
+        if not target_ip_norm:
+            QMessageBox.warning(self, DIALOG_TITLE, "Invalid DNS resolver list.")
+            return
+        target_ip = target_ip_norm
 
         # persist settings (scan domain only)
         if domain_override is None:
@@ -4005,10 +4170,13 @@ class App(QWidget):
         if not os.path.exists(slip_path):
             slip_path = "slipstream-client-windows-amd64.exe"
 
+        resolver_args = _resolver_args_from_dns(dns_ip)
+        if not resolver_args:
+            self.emitter.log.emit("ERROR", "Invalid DNS resolver list.")
+            return
         cmd = [
             slip_path,
-            "--resolver",
-            f"{dns_ip}:53",
+            *resolver_args,
             "--domain",
             domain,
             "--tcp-listen-port",

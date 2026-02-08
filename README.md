@@ -54,6 +54,10 @@ Example:
 ```
 SLIPSTREAM://1.2.3.4@example.com:53#My%20Server
 ```
+Multi DNS example:
+```
+SLIPSTREAM://8.8.8.8,1.1.1.1,9.9.9.9@example.com:53#My%20Server
+```
 
 **Modes**
 - **Global**: all traffic goes through proxy
@@ -67,6 +71,7 @@ Use **Set System Proxy** / **Clear System Proxy** to control Windows proxy setti
 - Set timeout, threads, and domain
 - Start scan to find working DNS IPs
 - Add results directly to the proxy list
+- Multi-select results and add as a single Multi DNS proxy config
 
 **Real Ping Test**
 Runs a deeper check on scan results to estimate real latency.
@@ -78,6 +83,12 @@ Enable **LAN Mode (Hotspot)** to share your proxy with devices on the same Wi‑
 - The app auto‑creates config files in `config/` on first run.
 - **Important:** `config/` is ignored by Git because it may contain sensitive data.
 - To reset the app, close it and delete the `config/` folder.
+
+## 🧩 Updates
+- Update core to Slipstream Rust Plus Deploy
+- Proxy dialog supports multiple DNS addresses (add/remove fields)
+- Slipstream links support multiple resolvers (CSV in address)
+- Scanner context menu can add selected rows as one Multi DNS proxy
 
 ## 📂 Project Structure
 - `Slipstreamplus.py` — main application
