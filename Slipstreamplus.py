@@ -11,8 +11,7 @@ import ipaddress
 import ctypes
 import winreg
 import ssl
-from urllib.parse import unquote, quote
-from urllib.parse import urlparse
+from urllib.parse import unquote, quote, urlparse, parse_qs
 from queue import Queue, Empty
 from typing import Optional, List, Dict, Tuple
 
@@ -204,6 +203,15 @@ def _resolver_args_from_dns(value: str) -> List[str]:
     for p in parts:
         args += ["--resolver", f"{p}:53"]
     return args
+
+def _safe_qs_first(parsed, key: str) -> str:
+    try:
+        vals = parse_qs(parsed.query or "").get(key, [])
+        if vals:
+            return str(vals[0] or "").strip()
+    except Exception:
+        pass
+    return ""
 
 def _strip_port(ip: str) -> str:
     s = ip.strip()
@@ -667,6 +675,8 @@ class App(QWidget):
         self.current_dns_ip: Optional[str] = None
         self.current_domain: Optional[str] = None
         self.current_proxy_remark: str = ""
+        self.current_proxy_username: str = ""
+        self.current_proxy_password: str = ""
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 5
         self.reconnect_timer: Optional[threading.Timer] = None
@@ -853,7 +863,7 @@ class App(QWidget):
         self.proxy_table.setColumnWidth(2, 200)
         self.proxy_table.setColumnWidth(7, 28)
 
-        proxy_hint = QLabel("Paste links with Ctrl+V or use Import. Format: SLIPSTREAM://dns[,dns...]@domain:53#remarks")
+        proxy_hint = QLabel("Paste links with Ctrl+V or use Import. Format: SLIPSTREAM://domain:53?dns=1.1.1.1,8.8.8.8#remarks")
         proxy_hint.setStyleSheet("color: #bdbdbd; font-size: 11px;")
 
         top_proxy = QWidget()
@@ -1225,13 +1235,16 @@ class App(QWidget):
             self._add_proxy_row(parsed)
             added += 1
         if added == 0:
-            self.emitter.log.emit("WARN", "No valid slipstream links found.")
+            self.emitter.log.emit("WARN", "Proxy: No valid slipstream links found.")
         else:
-            self.emitter.log.emit("INFO", f"Loaded {added} proxy link(s).")
+            self.emitter.log.emit("INFO", f"Proxy: Loaded {added} proxy link(s).")
             self._save_proxy_rows_to_config()
 
     def _parse_proxy_link(self, link: str) -> Optional[Dict[str, str]]:
-        # Expected: SLIPSTREAM://ip@domain:53#remarks or slipstream:/ (UDP)
+        # Supported:
+        # SLIPSTREAM://dns@domain:53#remarks
+        # SLIPSTREAM://domain:53?dns=1.1.1.1,8.8.8.8#remarks
+        # SLIPSTREAM://user:pass@domain:53?dns=1.1.1.1,8.8.8.8#remarks
         try:
             transport = "UDP"
             raw = link.strip()
@@ -1240,31 +1253,36 @@ class App(QWidget):
                 link = raw.replace("slipstream:/", "slipstream://", 1)
             if "://" not in link:
                 return None
-            type_part, rest = link.split("://", 1)
-            if type_part.strip().lower() != "slipstream":
+            parsed = urlparse(link)
+            if parsed.scheme.strip().lower() != "slipstream":
                 return None
-            remarks = ""
-            if "#" in rest:
-                rest, remarks = rest.split("#", 1)
-                remarks = unquote(remarks.strip())
-            cert = ""
-            if "@" in rest:
-                cert, rest = rest.split("@", 1)
-            if ":" not in rest:
-                return None
-            domain, port_str = rest.rsplit(":", 1)
-            domain = domain.strip()
-            port = int(port_str.strip())
-            if port != 53:
-                return None
-            if not domain:
-                return None
-            cert = cert.strip()
-            cert_norm = _normalize_dns_csv(cert)
-            if not cert_norm:
+            remarks = unquote((parsed.fragment or "").strip())
+
+            dns_qs = unquote(_safe_qs_first(parsed, "dns"))
+            dns_norm = _normalize_dns_csv(dns_qs) if dns_qs else None
+
+            domain = (parsed.hostname or "").strip()
+            port = parsed.port or 0
+            if port != 53 or not domain:
                 return None
             if not self._is_valid_domain(domain):
                 return None
+
+            username = unquote(parsed.username or "").strip()
+            password = unquote(parsed.password or "").strip()
+
+            if dns_norm:
+                cert_norm = dns_norm
+            else:
+                # legacy format: SLIPSTREAM://dns@domain:53#remarks
+                legacy_dns = unquote(parsed.username or "").strip()
+                cert_norm = _normalize_dns_csv(legacy_dns) if legacy_dns else None
+                # if looks like user:pass but dns missing, reject
+                if not cert_norm:
+                    return None
+                username = ""
+                password = ""
+
             return {
                 "type": "SLIPSTREAM",
                 "remarks": remarks,
@@ -1273,6 +1291,8 @@ class App(QWidget):
                 "port": "53",
                 "transport": transport,
                 "cert": cert_norm,
+                "username": username,
+                "password": password,
             }
         except Exception:
             return None
@@ -1295,6 +1315,8 @@ class App(QWidget):
             addr_item = QTableWidgetItem(addr_text)
             addr_item.setData(Qt.UserRole, data.get("cert", addr_text))
             addr_item.setData(Qt.UserRole + 1, data.get("domain", ""))
+            addr_item.setData(Qt.UserRole + 2, str(data.get("username", "") or ""))
+            addr_item.setData(Qt.UserRole + 3, str(data.get("password", "") or ""))
             self.proxy_table.setItem(row, 2, addr_item)
             port_item = QTableWidgetItem("53")
             port_item.setFlags(port_item.flags() & ~Qt.ItemIsEditable)
@@ -1352,6 +1374,8 @@ class App(QWidget):
                     "domain": str(addr_item.data(Qt.UserRole + 1) or ""),
                     "port": "53",
                     "transport": transport_item.text() if transport_item else "TCP",
+                    "username": str(addr_item.data(Qt.UserRole + 2) or ""),
+                    "password": str(addr_item.data(Qt.UserRole + 3) or ""),
                 }
             )
         self.config["proxy_rows"] = rows
@@ -1375,6 +1399,8 @@ class App(QWidget):
                     "port": str(row.get("port", "53")),
                     "transport": str(row.get("transport", "TCP")),
                     "cert": str(row.get("address", "")),
+                    "username": str(row.get("username", "")),
+                    "password": str(row.get("password", "")),
                 }
                 addr_norm = _normalize_dns_csv(data["address"])
                 if not addr_norm:
@@ -1516,6 +1542,18 @@ class App(QWidget):
         type_edit.setCurrentText("SLIPSTREAM")
         type_edit.setEnabled(False)
         remarks_edit = QLineEdit("")
+        auth_enable_chk = QCheckBox("Enable username/password")
+        auth_enable_chk.setChecked(False)
+        username_edit = QLineEdit("")
+        password_edit = QLineEdit("")
+        password_edit.setEchoMode(QLineEdit.Password)
+        username_edit.setEnabled(False)
+        password_edit.setEnabled(False)
+        auth_enable_chk.stateChanged.connect(
+            lambda _:
+            (username_edit.setEnabled(auth_enable_chk.isChecked()),
+             password_edit.setEnabled(auth_enable_chk.isChecked()))
+        )
         address_container = QWidget()
         address_layout = QVBoxLayout(address_container)
         address_layout.setContentsMargins(0, 0, 0, 0)
@@ -1558,6 +1596,9 @@ class App(QWidget):
         transport_edit.setEnabled(False)
         form.addRow("type", type_edit)
         form.addRow("Remarks", remarks_edit)
+        form.addRow("", auth_enable_chk)
+        form.addRow("username", username_edit)
+        form.addRow("password", password_edit)
         form.addRow("address", address_container)
         add_addr_btn = QPushButton("Add DNS")
         add_addr_btn.clicked.connect(lambda: _add_address_row(""))
@@ -1586,6 +1627,11 @@ class App(QWidget):
         new_addr = ",".join(addr_list)
         new_domain = domain_edit.text().strip()
         new_remarks = remarks_edit.text().strip()
+        if not new_remarks:
+            QMessageBox.warning(self, DIALOG_TITLE, "Remarks cannot be empty.")
+            return
+        new_username = username_edit.text().strip() if auth_enable_chk.isChecked() else ""
+        new_password = password_edit.text().strip() if auth_enable_chk.isChecked() else ""
         new_addr_norm = _normalize_dns_csv(new_addr)
         if not new_addr_norm:
             QMessageBox.warning(self, DIALOG_TITLE, "Invalid IP(s) in address.")
@@ -1602,6 +1648,8 @@ class App(QWidget):
             "port": "53",
             "transport": transport_edit.currentText(),
             "cert": new_addr_norm,
+            "username": new_username,
+            "password": new_password,
         }
         self._add_proxy_row(data)
         row = self.proxy_table.rowCount() - 1
@@ -1626,8 +1674,12 @@ class App(QWidget):
         current_transport = _get_text(row, 4)
         addr_item = self.proxy_table.item(row, 2)
         current_domain = ""
+        current_username = ""
+        current_password = ""
         if addr_item is not None:
             current_domain = str(addr_item.data(Qt.UserRole + 1) or "").strip()
+            current_username = str(addr_item.data(Qt.UserRole + 2) or "").strip()
+            current_password = str(addr_item.data(Qt.UserRole + 3) or "").strip()
 
         dlg = QDialog(self)
         dlg.setWindowTitle("Edit Proxy")
@@ -1640,6 +1692,18 @@ class App(QWidget):
         type_edit.setCurrentText("SLIPSTREAM")
         type_edit.setEnabled(False)
         remarks_edit = QLineEdit(current_remarks)
+        auth_enable_chk = QCheckBox("Enable username/password")
+        auth_enable_chk.setChecked(bool(current_username and current_password))
+        username_edit = QLineEdit(current_username)
+        password_edit = QLineEdit(current_password)
+        password_edit.setEchoMode(QLineEdit.Password)
+        username_edit.setEnabled(auth_enable_chk.isChecked())
+        password_edit.setEnabled(auth_enable_chk.isChecked())
+        auth_enable_chk.stateChanged.connect(
+            lambda _:
+            (username_edit.setEnabled(auth_enable_chk.isChecked()),
+             password_edit.setEnabled(auth_enable_chk.isChecked()))
+        )
         address_container = QWidget()
         address_layout = QVBoxLayout(address_container)
         address_layout.setContentsMargins(0, 0, 0, 0)
@@ -1686,6 +1750,9 @@ class App(QWidget):
         domain_edit = QLineEdit(current_domain)
         form.addRow("type", type_edit)
         form.addRow("Remarks", remarks_edit)
+        form.addRow("", auth_enable_chk)
+        form.addRow("username", username_edit)
+        form.addRow("password", password_edit)
         form.addRow("address", address_container)
         add_addr_btn = QPushButton("Add DNS")
         add_addr_btn.clicked.connect(lambda: _add_address_row(""))
@@ -1713,6 +1780,12 @@ class App(QWidget):
                 return
         new_addr = ",".join(addr_list)
         new_domain = domain_edit.text().strip()
+        new_remarks = remarks_edit.text().strip()
+        if not new_remarks:
+            QMessageBox.warning(self, DIALOG_TITLE, "Remarks cannot be empty.")
+            return
+        new_username = username_edit.text().strip() if auth_enable_chk.isChecked() else ""
+        new_password = password_edit.text().strip() if auth_enable_chk.isChecked() else ""
         new_addr_norm = _normalize_dns_csv(new_addr)
         if not new_addr_norm:
             QMessageBox.warning(self, DIALOG_TITLE, "Invalid IP(s) in address.")
@@ -1732,12 +1805,14 @@ class App(QWidget):
                 if c == 2:
                     item.setData(Qt.UserRole, new_addr_norm)
                     item.setData(Qt.UserRole + 1, new_domain)
+                    item.setData(Qt.UserRole + 2, new_username)
+                    item.setData(Qt.UserRole + 3, new_password)
                 if c == 1:
                     item.setData(Qt.UserRole + 3, value)
                     item.setFont(QFont("Segoe UI Emoji"))
 
             _set_item(row, 0, type_edit.currentText())
-            _set_item(row, 1, remarks_edit.text())
+            _set_item(row, 1, new_remarks)
             _set_item(row, 2, new_addr_norm)
             _set_item(row, 3, port_edit.text())
             _set_item(row, 4, transport_edit.currentText())
@@ -1769,9 +1844,20 @@ class App(QWidget):
         cert_val = cert_val if str(cert_val).strip() else addr_item.text().strip()
         domain_val = addr_item.data(Qt.UserRole + 1) or ""
         domain_val = str(domain_val).strip()
+        username_val = str(addr_item.data(Qt.UserRole + 2) or "").strip()
+        password_val = str(addr_item.data(Qt.UserRole + 3) or "").strip()
         if not domain_val:
             return None
-        link = f"{t}://{cert_val}@{domain_val}:{port}"
+        cert_val = str(cert_val).strip()
+        use_auth = bool(username_val and password_val)
+        use_query = use_auth or ("," in cert_val)
+        if use_query:
+            auth_part = ""
+            if use_auth:
+                auth_part = f"{quote(username_val, safe='')}:{quote(password_val, safe='')}@"
+            link = f"{t}://{auth_part}{domain_val}:{port}?dns={quote(cert_val, safe=',')}"
+        else:
+            link = f"{t}://{cert_val}@{domain_val}:{port}"
         if remarks:
             link += f"#{quote(remarks, safe='')}"
         return link
@@ -1932,6 +2018,20 @@ class App(QWidget):
                 return type_item.text().strip().upper() if type_item else "SLIPSTREAM"
         return "SLIPSTREAM"
 
+    def _get_proxy_auth_for_dns_domain(self, dns_ip: str, domain: str) -> Tuple[str, str]:
+        for r in range(self.proxy_table.rowCount()):
+            data = self._get_proxy_row_data(r)
+            if not data:
+                continue
+            if data[0] == dns_ip and data[1] == domain:
+                addr_item = self.proxy_table.item(r, 2)
+                if addr_item is None:
+                    return "", ""
+                username = str(addr_item.data(Qt.UserRole + 2) or "").strip()
+                password = str(addr_item.data(Qt.UserRole + 3) or "").strip()
+                return username, password
+        return "", ""
+
     @staticmethod
     def _mask_domain(domain: str) -> str:
         d = domain.strip()
@@ -1972,6 +2072,7 @@ class App(QWidget):
         self._bold_proxy_row(rows[-1])
         self._set_active_proxy_row(rows[-1])
         self.current_proxy_remark = self._get_proxy_remark_for_dns_domain(last_ip, last_domain)
+        self.current_proxy_username, self.current_proxy_password = self._get_proxy_auth_for_dns_domain(last_ip, last_domain)
         if self.running or self.reconnecting:
             if self.proc_singbox and self.proc_singbox.poll() is None:
                 self._restart_tunnel_only(last_ip, domain_override=last_domain)
@@ -2065,7 +2166,14 @@ class App(QWidget):
             item.setBackground(QColor(0, 0, 0, 0))
             item.setForeground(color)
 
-    def _run_slipstream_test(self, dns_ip: str, domain: str, timeout: float) -> Tuple[Optional[subprocess.Popen], int, bool]:
+    def _run_slipstream_test(
+        self,
+        dns_ip: str,
+        domain: str,
+        timeout: float,
+        username: str = "",
+        password: str = "",
+    ) -> Tuple[Optional[subprocess.Popen], int, bool]:
         slip_path = bin_path("slipstream-client-windows-amd64.exe")
         if not os.path.exists(slip_path):
             slip_path = "slipstream-client-windows-amd64.exe"
@@ -2115,7 +2223,7 @@ class App(QWidget):
 
         threading.Thread(target=_reader, daemon=True).start()
 
-        ready = self._wait_for_slipstream_ready_or_socks(timeout=timeout)
+        ready = self._wait_for_slipstream_ready_or_socks(timeout=timeout, username=username, password=password)
         if not ready:
             self.emitter.log.emit("WARN", "Proxy: SLIPSTREAM test TIMEOUT (not ready).")
         return proc, port, ready
@@ -2252,7 +2360,14 @@ class App(QWidget):
         mixed_port = 0
         try:
             self.emitter.log.emit("INFO", f"Proxy: Test Delay running for {dns_ip} / {domain}")
-            tunnel_proc, sing_proc, mixed_port = self._run_proxy_test_core(dns_ip, domain, timeout=10.0)
+            username, password = self._get_proxy_auth_for_dns_domain(dns_ip, domain)
+            tunnel_proc, sing_proc, mixed_port = self._run_proxy_test_core(
+                dns_ip,
+                domain,
+                timeout=10.0,
+                username=username,
+                password=password,
+            )
             if not tunnel_proc or not sing_proc or mixed_port <= 0:
                 self._set_proxy_cell_text(row, 5, "-1")
                 self.emitter.log.emit("WARN", "Proxy: Test Delay TIMEOUT (proxy not ready).")
@@ -2389,7 +2504,14 @@ class App(QWidget):
         sing_proc = None
         mixed_port = 0
         try:
-            tunnel_proc, sing_proc, mixed_port = self._run_proxy_test_core(dns_ip, domain, timeout=10.0)
+            username, password = self._get_proxy_auth_for_dns_domain(dns_ip, domain)
+            tunnel_proc, sing_proc, mixed_port = self._run_proxy_test_core(
+                dns_ip,
+                domain,
+                timeout=10.0,
+                username=username,
+                password=password,
+            )
             if not tunnel_proc or not sing_proc or mixed_port <= 0:
                 self._set_proxy_cell_text(row, 5, "-1")
                 self._set_proxy_cell_text(row, 6, "-1")
@@ -2443,20 +2565,27 @@ class App(QWidget):
             color = "#64b5f6"
 
         line = f"{ts} [{level}] {msg}"
-        if not any(tag in msg for tag in ("SING-BOX", "Proxy", "SLIPSTREAM", "CONNECT", "System Proxy", "Auto reconnect", "LAN Mode", "Hotspot Mode")):
+        proxy_tags = ("Proxy", "SLIPSTREAM", "Hotspot Mode")
+        connect_tags = ("CONNECT", "System Proxy", "Auto reconnect", "LAN Mode", "SING-BOX")
+
+        target = "main"
+        if any(tag in msg for tag in proxy_tags):
+            target = "proxy"
+        elif any(tag in msg for tag in connect_tags):
+            target = "connect"
+
+        if target == "main":
             self.log_box.append(f'<span style="color:{color};">{line}</span>')
             sb = self.log_box.verticalScrollBar()
             sb.setValue(sb.maximum())
-
-        if any(tag in msg for tag in ("SLIPSTREAM", "SING-BOX", "CONNECT", "Proxy", "System Proxy", "Auto reconnect")):
+        elif target == "connect":
             try:
                 self.connect_log_box.append(line)
                 sb2 = self.connect_log_box.verticalScrollBar()
                 sb2.setValue(sb2.maximum())
             except Exception:
                 pass
-
-        if "Proxy" in msg or "SLIPSTREAM" in msg or "Hotspot Mode" in msg:
+        else:
             try:
                 self.proxy_log_box.append(line)
                 sb3 = self.proxy_log_box.verticalScrollBar()
@@ -3492,6 +3621,7 @@ class App(QWidget):
         self.current_domain = domain
         if not self.current_proxy_remark:
             self.current_proxy_remark = self._get_proxy_remark_for_dns_domain(ip, domain)
+        self.current_proxy_username, self.current_proxy_password = self._get_proxy_auth_for_dns_domain(ip, domain)
         self.spawn_slipstream_tunnel(ip, domain)
 
         # sing-box is already running, so proxy is up
@@ -3521,6 +3651,7 @@ class App(QWidget):
         if self.proc_singbox and self.proc_singbox.poll() is None:
             if self.current_domain:
                 self.current_proxy_remark = self._get_proxy_remark_for_dns_domain(ip, self.current_domain)
+                self.current_proxy_username, self.current_proxy_password = self._get_proxy_auth_for_dns_domain(ip, self.current_domain)
             self._restart_tunnel_only(ip, domain_override=self.current_domain)
             return
         if self.running or self.reconnecting:
@@ -3696,24 +3827,53 @@ class App(QWidget):
         self.scan_progress.setRange(0, total)
         self.scan_progress.setValue(min(self.real_ping_done, total))
 
-    def _wait_for_slipstream_ready_or_socks(self, timeout: float = 15.0) -> bool:
+    def _wait_for_slipstream_ready_or_socks(
+        self,
+        timeout: float = 15.0,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> bool:
+        user = self.current_proxy_username if username is None else username
+        pwd = self.current_proxy_password if password is None else password
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             if self.slipstream_ready_event.is_set():
                 return True
             try:
-                if self._socks5_probe(int(self.internal_port), timeout=0.8):
+                if self._socks5_probe(
+                    int(self.internal_port),
+                    timeout=0.8,
+                    username=user,
+                    password=pwd,
+                ):
                     return True
             except Exception:
                 pass
             time.sleep(0.2)
         return False
 
-    def _socks5_probe(self, proxy_port: int, timeout: float = 1.0) -> bool:
+    def _socks5_probe(self, proxy_port: int, timeout: float = 1.0, username: str = "", password: str = "") -> bool:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         try:
             sock.connect(("127.0.0.1", proxy_port))
+            if username and password:
+                sock.sendall(b"\x05\x02\x00\x02")
+                resp = sock.recv(2)
+                if len(resp) != 2 or resp[0] != 0x05:
+                    return False
+                if resp[1] == 0x00:
+                    return True
+                if resp[1] != 0x02:
+                    return False
+                u = username.encode("utf-8")
+                p = password.encode("utf-8")
+                if len(u) > 255 or len(p) > 255:
+                    return False
+                auth_req = b"\x01" + bytes([len(u)]) + u + bytes([len(p)]) + p
+                sock.sendall(auth_req)
+                auth_resp = sock.recv(2)
+                return len(auth_resp) == 2 and auth_resp[1] == 0x00
             sock.sendall(b"\x05\x01\x00")
             resp = sock.recv(2)
             return len(resp) == 2 and resp[0] == 0x05 and resp[1] == 0x00
@@ -3797,8 +3957,21 @@ class App(QWidget):
         except Exception:
             return -1, "ERROR"
 
-    def _run_proxy_test_core(self, dns_ip: str, domain: str, timeout: float) -> Tuple[Optional[subprocess.Popen], Optional[subprocess.Popen], int]:
-        tunnel_proc, internal_port, ready = self._run_slipstream_test(dns_ip, domain, timeout=timeout)
+    def _run_proxy_test_core(
+        self,
+        dns_ip: str,
+        domain: str,
+        timeout: float,
+        username: str = "",
+        password: str = "",
+    ) -> Tuple[Optional[subprocess.Popen], Optional[subprocess.Popen], int]:
+        tunnel_proc, internal_port, ready = self._run_slipstream_test(
+            dns_ip,
+            domain,
+            timeout=timeout,
+            username=username,
+            password=password,
+        )
         if not ready or not tunnel_proc:
             return tunnel_proc, None, 0
 
@@ -3823,6 +3996,9 @@ class App(QWidget):
                 }
             ],
         }
+        if username and password:
+            config["outbounds"][0]["username"] = username
+            config["outbounds"][0]["password"] = password
 
         test_cfg = config_path(f"config_proxy_test_{mixed_port}.json")
         with open(test_cfg, "w", encoding="utf-8") as f:
@@ -4122,6 +4298,7 @@ class App(QWidget):
         self.current_dns_ip = target_ip
         self.current_domain = domain
         self.current_proxy_remark = self._get_proxy_remark_for_dns_domain(target_ip, domain)
+        self.current_proxy_username, self.current_proxy_password = self._get_proxy_auth_for_dns_domain(target_ip, domain)
         self.graceful_stop = False
 
         lan_mode = bool(self.config.get("lan_mode", False))
@@ -4216,6 +4393,9 @@ class App(QWidget):
             },
             {"type": "direct", "tag": "direct"},
         ]
+        if self.current_proxy_username and self.current_proxy_password:
+            outbounds[0]["username"] = self.current_proxy_username
+            outbounds[0]["password"] = self.current_proxy_password
 
         route = None
         if proxy_mode == "IR-Direct":
@@ -4325,6 +4505,8 @@ class App(QWidget):
         self.reconnecting = False
         self.current_dns_ip = None
         self.current_domain = None
+        self.current_proxy_username = ""
+        self.current_proxy_password = ""
         self.reconnect_attempts = 0
         self.graceful_stop = False
         self.set_status("Stopped")

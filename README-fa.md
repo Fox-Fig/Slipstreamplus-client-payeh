@@ -47,15 +47,15 @@ python Slipstreamplus.py
 
 **فرمت لینک Slipstream**
 ```
-SLIPSTREAM://<DNS_IP>@<DOMAIN>:53#<REMARKS>
+SLIPSTREAM://<DOMAIN>:53?dns=<DNS_IP>[,<DNS_IP>...]#<REMARKS>
 ```
 نمونه:
 ```
-SLIPSTREAM://1.2.3.4@example.com:53#My%20Server
+SLIPSTREAM://s.example.com:53?dns=1.2.3.4#My%20Server
 ```
-نمونه چند DNS:
+نمونه با یوزرنیم/پسورد و چند DNS:
 ```
-SLIPSTREAM://8.8.8.8,1.1.1.1,9.9.9.9@example.com:53#My%20Server
+SLIPSTREAM://user:pass@s.example.com:53?dns=8.8.8.8,1.1.1.1,9.9.9.9#My%20Server
 ```
 
 **مودها**
@@ -86,8 +86,11 @@ SLIPSTREAM://8.8.8.8,1.1.1.1,9.9.9.9@example.com:53#My%20Server
 ## 🧩 به‌روزرسانی‌ها
 - Update core to Slipstream Rust Plus Deploy
 - دیالوگ پروکسی از چند DNS پشتیبانی می‌کند (افزودن/حذف فیلد)
-- لینک‌های Slipstream چند DNS را می‌پذیرند (CSV در آدرس)
+- لینک‌های Slipstream چند DNS را می‌پذیرند (query dns)
 - منوی راست‌کلیک اسکنر امکان افزودن Multi DNS را دارد
+- پشتیبانی از یوزرنیم/پسورد برای SOCKS5
+- لاگ‌های پروکسی از لاگ عمومی جدا شدند
+- ریمارک برای کانفیگ پروکسی اجباری است
 
 ## 📂 ساختار پروژه
 - `Slipstreamplus.py` — هسته برنامه

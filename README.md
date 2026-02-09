@@ -48,15 +48,15 @@ python Slipstreamplus.py
 
 **Slipstream link format**
 ```
-SLIPSTREAM://<DNS_IP>@<DOMAIN>:53#<REMARKS>
+SLIPSTREAM://<DOMAIN>:53?dns=<DNS_IP>[,<DNS_IP>...]#<REMARKS>
 ```
 Example:
 ```
-SLIPSTREAM://1.2.3.4@example.com:53#My%20Server
+SLIPSTREAM://s.example.com:53?dns=1.2.3.4#My%20Server
 ```
-Multi DNS example:
+With auth + multi DNS:
 ```
-SLIPSTREAM://8.8.8.8,1.1.1.1,9.9.9.9@example.com:53#My%20Server
+SLIPSTREAM://user:pass@s.example.com:53?dns=8.8.8.8,1.1.1.1,9.9.9.9#My%20Server
 ```
 
 **Modes**
@@ -87,8 +87,11 @@ Enable **LAN Mode (Hotspot)** to share your proxy with devices on the same Wi‑
 ## 🧩 Updates
 - Update core to Slipstream Rust Plus Deploy
 - Proxy dialog supports multiple DNS addresses (add/remove fields)
-- Slipstream links support multiple resolvers (CSV in address)
+- Slipstream links support multiple resolvers (dns query)
 - Scanner context menu can add selected rows as one Multi DNS proxy
+- Proxy auth (username/password) support for SOCKS5 connections
+- Proxy logs are separated from general logs
+- Remarks are required for proxy configs
 
 ## 📂 Project Structure
 - `Slipstreamplus.py` — main application
