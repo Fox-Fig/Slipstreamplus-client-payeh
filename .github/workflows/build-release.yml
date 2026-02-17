@@ -47,7 +47,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir bin
+          if (!(Test-Path "bin")) { mkdir bin }
           # Download Slipstream Client
           gh release download -R Fox-Fig/slipstream-rust-plus-deploy -p "slipstream-client-windows-amd64.exe" -D bin
           
