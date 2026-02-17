@@ -90,7 +90,12 @@ def resource_path(relative_path: str) -> str:
 
 
 def bin_path(filename: str) -> str:
-    return resource_path(os.path.join("bin", filename))
+    path = resource_path(os.path.join("bin", filename))
+    if os.name != "nt" and os.path.exists(path):
+        import stat
+        st = os.stat(path)
+        os.chmod(path, st.st_mode | stat.S_IEXEC)
+    return path
 
 
 def config_path(filename: str) -> str:
