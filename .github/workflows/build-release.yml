@@ -54,7 +54,7 @@ jobs:
           # Download Sing-box
           gh release download -R SagerNet/sing-box -p "*windows-amd64.zip" --clobber
           7z x sing-box-*-windows-amd64.zip -o"." -y
-          move sing-box-*-windows-amd64/sing-box.exe bin/sing-box.exe
+          Move-Item -Path sing-box-*-windows-amd64/sing-box.exe -Destination bin/sing-box.exe -Force
           
           dir bin
 
