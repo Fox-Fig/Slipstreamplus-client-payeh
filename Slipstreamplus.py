@@ -1,4 +1,5 @@
 import sys
+import signal
 import os
 import subprocess
 import threading
@@ -4777,4 +4778,17 @@ if __name__ == "__main__":
 
     w = App()
     w.show()
+
+    # Allow Ctrl+C to close the app
+    def signal_handler(sig, frame):
+        print("\nCtrl+C caught. Exiting...")
+        w.close_app()
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    # Timer to let Python interpreter run periodically to catch signals
+    timer = QTimer()
+    timer.start(200)
+    timer.timeout.connect(lambda: None)
+
     sys.exit(app.exec())
