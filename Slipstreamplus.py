@@ -4751,6 +4751,10 @@ if __name__ == "__main__":
     except Exception:
         pass
 
+    if sys.platform == "linux":
+        # Force X11 backend to avoid Wayland/Input Method segfaults on some distros
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
     app = QApplication(sys.argv)
     shared = QSharedMemory(APP_ID)
     if not shared.create(1):
