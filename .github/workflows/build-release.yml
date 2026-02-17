@@ -119,12 +119,15 @@ jobs:
             --add-data "cidrs:cidrs" \
             --add-data "README-fa.md:." \
             Slipstreamplus.py
+          
+          cd dist
+          zip -r SlipstreamPlus-Linux.zip SlipstreamPlus-Linux
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: SlipstreamPlus-Linux
-          path: dist/SlipstreamPlus-Linux
+          path: dist/SlipstreamPlus-Linux.zip
 
   release:
     runs-on: ubuntu-latest
@@ -138,13 +141,20 @@ jobs:
       - name: Display structure of downloaded files
         run: ls -R artifacts
 
+      - name: Delete Existing Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete ${{ github.ref_name }} --yes --cleanup-tag || true
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/SlipstreamPlus-Windows-${{ needs.detect-version.outputs.version }}/SlipstreamPlus-Windows.exe
-            artifacts/SlipstreamPlus-Linux-${{ needs.detect-version.outputs.version }}/SlipstreamPlus-Linux
+            artifacts/SlipstreamPlus-Windows/SlipstreamPlus-Windows.exe
+            artifacts/SlipstreamPlus-Linux/SlipstreamPlus-Linux.zip
           prerelease: ${{ needs.detect-version.outputs.is_prerelease == 'true' }}
           generate_release_notes: true
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
+          fail_on_unmatched_files: true
