@@ -49,11 +49,11 @@ jobs:
         run: |
           if (!(Test-Path "bin")) { mkdir bin }
           # Download Slipstream Client
-          gh release download -R Fox-Fig/slipstream-rust-plus-deploy -p "slipstream-client-windows-amd64.exe" -D bin
+          gh release download -R Fox-Fig/slipstream-rust-plus-deploy -p "slipstream-client-windows-amd64.exe" -D bin --clobber
           
           # Download Sing-box
-          gh release download -R SagerNet/sing-box -p "*windows-amd64.zip"
-          7z x sing-box-*-windows-amd64.zip -o.
+          gh release download -R SagerNet/sing-box -p "*windows-amd64.zip" --clobber
+          7z x sing-box-*-windows-amd64.zip -o"." -y
           move sing-box-*-windows-amd64/sing-box.exe bin/sing-box.exe
           
           dir bin
@@ -98,11 +98,11 @@ jobs:
         run: |
           mkdir -p bin
           # Download Slipstream Client
-          gh release download -R Fox-Fig/slipstream-rust-plus-deploy -p "slipstream-client-linux-amd64" -D bin
+          gh release download -R Fox-Fig/slipstream-rust-plus-deploy -p "slipstream-client-linux-amd64" -D bin --clobber
           chmod +x bin/slipstream-client-linux-amd64
           
           # Download Sing-box
-          gh release download -R SagerNet/sing-box -p "*linux-amd64.tar.gz"
+          gh release download -R SagerNet/sing-box -p "*linux-amd64.tar.gz" --clobber
           tar -xzf sing-box-*-linux-amd64.tar.gz
           mv sing-box-*-linux-amd64/sing-box bin/sing-box
           chmod +x bin/sing-box
